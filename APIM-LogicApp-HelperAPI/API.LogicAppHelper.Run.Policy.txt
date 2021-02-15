@@ -1,0 +1,87 @@
+<policies>
+    <inbound>
+        <set-variable name="ApimKey" value="@(context.Request.Headers["Ocp-Apim-Subscription-Key"].FirstOrDefault())" />
+        
+        <!-- 
+        These values will be looked up from named values.  In my demo im calling logic apps in the same subscription and resource group
+        but you can change that depending upon your requirements.  Maybe pass them in as a parameter or similar.
+        -->
+        <set-variable name="resourceGroupName" value="{{eai-resourcegroup-name}}" />
+        <set-variable name="subscriptionId" value="{{eai-subscriptionid}}" />        
+        <set-variable name="ApimUrl" value="{{eai-apim-baseurl}}"/>
+
+        <set-variable name="logicAppName" value="@(System.Net.WebUtility.UrlDecode(context.Request.MatchedParameters["logicAppName"]))" />        
+        
+        <!-- Get the Logic App Url by calling the callbackurl operation on this API -->
+        <set-variable name="getLogicAppUrlAPI" value="@(context.Variables["ApimUrl"] + "/eai/platform/logicapps/callbackurl/" + context.Variables["logicAppName"] + "?cacheTimeoutSecs=60")" />                
+        <send-request ignore-error="false" timeout="20" response-variable-name="logicAppGetUrlResponse" mode="new">
+            <set-url>@(context.Variables.GetValueOrDefault<string>("getLogicAppUrlAPI"))</set-url>
+            <set-method>GET</set-method>
+            <set-header name="Ocp-Apim-Subscription-Key" exists-action="override">
+                <value>@(context.Variables.GetValueOrDefault<string>("ApimKey"))</value>
+            </set-header>
+        </send-request>
+
+        <!-- Get Details from Logic App Url Response -->
+        <set-variable name="logicAppGetUrlResponseObject" value="@(((IResponse)context.Variables["logicAppGetUrlResponse"]).Body.As<JObject>())" />
+        <set-variable name="logicAppUrl" value="@{
+		    JObject o = (JObject)context.Variables["logicAppGetUrlResponseObject"];			
+		    return (string)o["logicAppUrl"];
+	    }" />
+                
+        <!-- Call the target Logic App using the url returned previously -->
+        <send-request ignore-error="false" timeout="20" response-variable-name="logicAppResponse" mode="new">
+            <set-url>@((string)context.Variables["logicAppUrl"])</set-url>
+            <set-method>POST</set-method>
+            <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+            </set-header>
+            <set-body>@(context.Request.Body.As<string>())</set-body>
+        </send-request>
+                
+        <set-variable name="logicAppResponseStatus" value="@(((IResponse)context.Variables["logicAppResponse"]).StatusCode)" />
+        <set-variable name="logicAppResponseStatusDescription" value="@(((IResponse)context.Variables["logicAppResponse"]))" />
+
+        <return-response>
+            <set-status code="@((int)(context.Variables["logicAppResponseStatus"]))" reason="TBC" />
+            <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+            </set-header>        
+            <set-body>@(((IResponse)context.Variables["logicAppResponse"]).Body.As<string>())</set-body>                
+        </return-response>
+
+        <base />
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+    </outbound>
+    <on-error>
+        <return-response>
+            <set-status code="500" reason="OK" />
+            <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+            </set-header>
+            <set-header name="CachedResponse" exists-action="override">
+                <value>false</value>
+            </set-header>
+            <set-body>@(
+                                new JObject(
+                                    new JProperty("fault", 
+                                        new JObject(
+                                                new JProperty("faultActor", ""),
+                                                new JProperty("faultCode", 500),
+                                                new JProperty("faultReason", "Error running logic app"),
+                                                new JProperty("faultCategory", "Error"),
+                                                new JProperty("faultMessage", "Unable to run the logic app, please refer to Logic App diagnostics or App Insights")
+                                        )
+                                    )
+                                ).ToString()
+                            )</set-body>
+        </return-response>
+
+        <base />
+    </on-error>
+</policies>

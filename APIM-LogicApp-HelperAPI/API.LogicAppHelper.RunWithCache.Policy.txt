@@ -1,0 +1,83 @@
+<policies>
+    <inbound>                        
+        <set-variable name="ApimKey" value="@(context.Request.Headers["Ocp-Apim-Subscription-Key"].FirstOrDefault())" />
+        
+        <!-- 
+        These values will be looked up from named values.  In my demo im calling logic apps in the same subscription and resource group
+        but you can change that depending upon your requirements.  Maybe pass them in as a parameter or similar.
+        -->
+        <set-variable name="resourceGroupName" value="{{eai-resourcegroup-name}}" />
+        <set-variable name="subscriptionId" value="{{eai-subscriptionid}}" />
+        <set-variable name="ApimUrl" value="{{eai-apim-baseurl}}"/>
+
+
+        <set-variable name="logicAppName" value="@(System.Net.WebUtility.UrlDecode(context.Request.MatchedParameters["logicAppName"]))" />
+        <set-variable name="cacheTimeoutSecs" value="@(context.Request.OriginalUrl.Query.GetValueOrDefault("cacheTimeoutSecs"))" />
+        <set-variable name="cacheKey" value="@("Cache:LogicAppResponse:" + context.Variables["resourceGroupName"] + ":" + context.Variables["logicAppName"] + ":" + System.Net.WebUtility.UrlDecode(context.Request.MatchedParameters["cacheKey"]))" />
+        <set-variable name="runLogicAppUrl" value="@(context.Variables["ApimUrl"] + "/eai/platform/logicapps/" + context.Variables["logicAppName"] + "/run")" />
+        
+        <!-- Check if there is a value in cache or if we need to flush -->
+        <choose>
+            <when condition="@(System.String.Compare(context.Request.OriginalUrl.Query.GetValueOrDefault("clearCache"), "true", true) == 0)">
+                <cache-remove-value key="@(context.Variables.GetValueOrDefault<string>("cacheKey"))" caching-type="prefer-external" />
+                <set-variable name="logicAppResponse" value="@(null)" />
+            </when>
+            <otherwise>
+                <cache-lookup-value key="@(context.Variables.GetValueOrDefault<string>("cacheKey"))" variable-name="logicAppResponse" caching-type="prefer-external" />
+            </otherwise>
+        </choose>
+        <choose>
+            <when condition="@(context.Variables.GetValueOrDefault<IResponse>("logicAppResponse") == null)">                
+                <!-- Call Logic App via Run Logic App API -->
+                <send-request ignore-error="false" timeout="20" response-variable-name="logicAppResponse" mode="new">
+                    <set-url>@((string)context.Variables["runLogicAppUrl"])</set-url>
+                    <set-method>POST</set-method>
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-header name="Ocp-Apim-Subscription-Key" exists-action="override">
+                        <value>@(context.Variables.GetValueOrDefault<string>("ApimKey"))</value>
+                    </set-header>
+                    <set-body>@(context.Request.Body.As<string>())</set-body>
+                </send-request>
+                <cache-store-value key="@(context.Variables.GetValueOrDefault<string>("cacheKey"))" value="@((IResponse)context.Variables["logicAppResponse"])" duration="@(int.Parse((string)context.Variables["cacheTimeoutSecs"]))" caching-type="prefer-external" />
+                <return-response>
+                    <set-status code="200" reason="OK" />
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-header name="CachedResponse" exists-action="override">
+                        <value>false</value>
+                    </set-header>
+                    <set-body>@(
+                        ((IResponse)context.Variables["logicAppResponse"]).Body.As<string>()
+                    )</set-body>
+                </return-response>
+            </when>
+            <otherwise>
+                <return-response>
+                    <set-status code="200" reason="OK" />
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-header name="CachedResponse" exists-action="override">
+                        <value>true</value>
+                    </set-header>
+                    <set-body>@(
+                        ((IResponse)context.Variables["logicAppResponse"]).Body.As<string>()
+                    )</set-body>
+                </return-response>
+            </otherwise>
+        </choose>
+        <base />
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>

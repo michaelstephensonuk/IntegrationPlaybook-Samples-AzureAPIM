@@ -1,0 +1,1 @@
+This solution will help to implement a helper API for logic apps which will allow you to cache the responses and dynamically call logic apps by supplying their name
